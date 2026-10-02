@@ -175,10 +175,29 @@ func _stream(b: PackedFloat32Array, loop := false) -> AudioStreamWAV:
 # ---------------------------------------------------------------- sound design
 
 func _build_all() -> void:
-	# Footsteps: gritty low thump.
-	var step := _mix(_norm(_noise(0.14, 1100.0, 250.0, 0.004, 3.0), 0.5), _norm(_tone(0.1, 110.0, 55.0, "sine", 0.002, 2.0), 0.45))
-	streams["step"] = _stream(step)
-	streams["step_soft"] = _stream(_norm(_noise(0.12, 500.0, 180.0, 0.01, 2.5), 0.22))
+	# Weapons.
+	var twang := _mix(_norm(_lowpass(_tone(0.35, 180.0, 120.0, "saw", 0.001, 3.0), 1600.0), 0.55), _norm(_noise(0.08, 4000.0, 900.0, 0.001, 2.0), 0.5))
+	streams["crossbow"] = _stream(twang)
+	streams["bolt_hit"] = _stream(_mix(_norm(_noise(0.12, 2200.0, 400.0, 0.001, 3.0), 0.6), _norm(_tone(0.15, 160.0, 90.0, "sine", 0.001, 3.0), 0.5)))
+	var ratchet := PackedFloat32Array()
+	for k in 7:
+		ratchet = _mix(ratchet, _norm(_noise(0.025, 5000.0, 2500.0, 0.001, 2.0, true), 0.35), k * 0.17)
+	ratchet = _mix(ratchet, _norm(_tone(0.12, 900.0, 700.0, "square", 0.002, 3.0), 0.2), 1.25)
+	streams["reload"] = _stream(ratchet)
+	streams["click"] = _stream(_norm(_noise(0.03, 6000.0, 3000.0, 0.001, 2.0, true), 0.3))
+	var draw := _mix(_norm(_noise(0.3, 3000.0, 7000.0, 0.02, 1.5, true), 0.3), _norm(_tone(0.35, 2600.0, 2500.0, "sine", 0.01, 3.0), 0.08))
+	streams["draw"] = _stream(draw)
+	streams["sheathe"] = _stream(_norm(_noise(0.22, 2000.0, 900.0, 0.01, 2.0, true), 0.22))
+	# Muffled struggle behind a gloved hand, and an unmuffled death-cry.
+	streams["muffled"] = _stream(_norm(_lowpass(_tone(0.45, 170.0, 140.0, "saw", 0.03, 1.2, 7.0, 0.08), 450.0), 0.4))
+	var cry := _tone(0.9, 420.0, 190.0, "saw", 0.01, 1.4, 11.0, 0.09)
+	cry = _mix(_lowpass(cry, 1500.0), _norm(_noise(0.9, 1500.0, 500.0, 0.05, 1.5), 0.35))
+	streams["deathcry"] = _stream(_norm(cry, 0.65))
+	# "Spotted" sting: dissonant stab.
+	var sting2 := PackedFloat32Array()
+	for f in [622.0, 659.0, 932.0, 988.0]:
+		sting2 = _mix(sting2, _tone(0.7, f, f * 0.98, "saw", 0.003, 2.5), 0.0, 0.15)
+	streams["spotted"] = _stream(_norm(_lowpass(sting2, 3500.0), 0.6))
 
 	# Blade whoosh.
 	streams["swing"] = _stream(_norm(_noise(0.3, 500.0, 3200.0, 0.12, 2.0, true), 0.45))

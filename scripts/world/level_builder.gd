@@ -774,7 +774,7 @@ func _spawn_characters() -> void:
 	_add_guard({"name": "Tamsin", "model": _guard_model(blue, "kettle", 9), "lantern": true,
 		"waypoints": [Vector3(17.3, 0, -4.9), Vector3(28.3, 0, -4.9), Vector3(28.3, 0, -26.2), Vector3(17.3, 0, -26.2), Vector3(17.3, 0, -16.5)],
 		"waits": [2.0, 3.0, 3.0, 2.0, 4.0]})
-	var lord = _add_guard({"name": "Lord Aldric Vane", "target": true, "walk_speed": 1.15,
+	var lord = _add_guard({"name": "Lord Aldric Vane", "target": true, "walk_speed": 1.15, "health": 50.0,
 		"model": {"type": "noble", "seed": 11, "robe": Color(0.28, 0.04, 0.24), "hair": Color(0.6, 0.6, 0.62)},
 		"safe_point": Vector3(7.2, 0, -27.4),
 		"waypoints": [Vector3(-3.5, 0.16, -27.0), Vector3(-3.5, 0, -18.5), Vector3(9.5, 0, -25.6), Vector3(12.0, 0, -17.0),
@@ -787,3 +787,30 @@ func _spawn_characters() -> void:
 		"waypoints": [Vector3(-1.8, 0, -25.4)], "waits": [INF_WAIT], "yaws": [180.0], "walk_speed": 1.4})
 	cap.follow = lord
 	cap.run_speed = 4.4
+	GameState.alarm_changed.connect(_on_alarm)
+
+
+var _reinforced := false
+
+
+func _on_alarm(active: bool) -> void:
+	## First alarm of the night: the gate garrison turns out and hunts you.
+	if not active or _reinforced:
+		return
+	_reinforced = true
+	get_tree().create_timer(6.0).timeout.connect(_send_reinforcements)
+
+
+func _send_reinforcements() -> void:
+	if GameState.mission_over:
+		return
+	GameState.notify.emit("Reinforcements pour through the gate!", 3.0)
+	Sfx.play_ui("alarm_bell", -2.0)
+	for i in 3:
+		var gd = _add_guard({"name": "Gate Sergeant %d" % (i + 1),
+			"model": _guard_model(Color(0.3, 0.05, 0.05), "kettle", 20 + i, {"cloak": Color(0.05, 0.05, 0.05)}),
+			"waypoints": [Vector3(-1.5 + i * 1.5, 0, 26.0)], "waits": [8.0], "walk_speed": 1.8})
+		gd.run_speed = 5.2
+		var p = GameState.player
+		if p:
+			gd.call_deferred("investigate", p.global_position, true)

@@ -11,11 +11,17 @@ const Geo = preload("res://scripts/util/geo.gd")
 const Mats = preload("res://scripts/util/mats.gd")
 const Fx = preload("res://scripts/fx/fx.gd")
 
-enum S { PATROL, SUSPICIOUS, INVESTIGATE, COMBAT, SEARCH, BLINDED, ASLEEP, DEAD, FLEE, COWER }
+enum S { PATROL, SUSPICIOUS, INVESTIGATE, COMBAT, SEARCH, BLINDED, ASLEEP, DEAD, FLEE, COWER, SPOTTED }
 
 const VIEW_RANGE := 17.0
 const FOV_HALF := 57.0
 const GRAVITY := 9.8
+const REACTION_TIME := 0.85  # seconds between "Hey--!" and the alarm: your only chance
+const RESTRAIN_TIME := 1.8   # how long a mouth-covered guard struggles before breaking free
+const ATTACK_TIME := 0.8
+const ATTACK_HIT := 0.42
+const ATTACK_DAMAGE := 40.0
+const COMBAT_SPEED := 5.1
 const BARKS := {
 	"suspicious": ["Hm? What was that?", "Who's there?", "Something moved...", "Hello?"],
 	"calm": ["Must be the wind.", "Just shadows.", "Bah. Rats again.", "Getting jumpy..."],
@@ -29,6 +35,10 @@ const BARKS := {
 	"blind": ["AAGH! MY EYES!", "I can't see! I CAN'T SEE!", "Witchcraft! Help me!"],
 	"sleep_resist": ["Nngh... no... sorcery!", "Not... so easily!"],
 	"target_flee": ["ASSASSIN! Guards! GUARDS!", "Protect me, you fools!"],
+	"spotted": ["Hey--!", "Wha--?! You there--", "Who in the--"],
+	"muffled": ["Mmmph!", "Mmf-- mmMPH!", "Nnngh!"],
+	"wounded": ["AARGH! I'm stabbed!", "Assassin! ASSASSIN!", "Gah! Here! HERE!"],
+	"broke_free": ["*gasp* INTRUDER!", "HELP! HE'S HERE!"],
 }
 
 var display_name := "Guard"
@@ -79,6 +89,9 @@ var body_check_t := 0.0
 var shout_t := 0.0
 var wake_target = null
 var stuck_t := 0.0
+var spotted_t := 0.0
+var restrained := false
+var restrain_t := 0.0
 var unstick_t := 0.0
 var unstick_dir := Vector3.ZERO
 var stuck_count := 0
@@ -102,6 +115,7 @@ func setup(p_cfg: Dictionary) -> void:
 	deep_sleep = p_cfg.get("deep_sleep", false)
 	idle_pose = p_cfg.get("idle_pose", "idle")
 	walk_speed = p_cfg.get("walk_speed", 1.45)
+	health = p_cfg.get("health", 100.0)
 	set_meta("cfg", p_cfg)
 
 
@@ -206,9 +220,21 @@ func look_dir() -> Vector3:
 func threat_level() -> float:
 	if state in [S.DEAD, S.ASLEEP, S.BLINDED]:
 		return 0.0
-	if state == S.COMBAT:
+	if state == S.COMBAT or state == S.SPOTTED:
 		return 1.0
 	return clampf(awareness, 0.0, 1.0)
+
+
+func throat_pos() -> Vector3:
+	return model.neck.global_transform * Vector3(0, 0.035, -0.055)
+
+
+func mouth_pos() -> Vector3:
+	return model.head.global_transform * Vector3(0, 0.05, -0.1)
+
+
+func throat_test(a: Vector3, b: Vector3, extra := 0.0) -> bool:
+	return Geo.seg_point_dist(a, b, throat_pos()) < 0.085 + extra
 
 
 func hit_spheres() -> Array:
@@ -334,7 +360,10 @@ func _physics_process(delta: float) -> void:
 	state_t += delta
 	_bark_cd -= delta
 	attack_cd -= delta
-	if state != S.ASLEEP and state != S.BLINDED:
+	if restrained:
+		_do_restrained(delta)
+		return
+	if state != S.ASLEEP and state != S.BLINDED and state != S.SPOTTED:
 		_perceive(delta)
 		_check_bodies(delta)
 
@@ -358,6 +387,8 @@ func _physics_process(delta: float) -> void:
 		S.COWER:
 			_stop()
 			model.pose = "cower"
+		S.SPOTTED:
+			_do_spotted(delta)
 
 	if is_on_floor():
 		velocity.y = -0.5
@@ -391,6 +422,9 @@ func _update_labels(delta: float) -> void:
 			col = Color(0.5, 0.7, 1.0, 0.6 + 0.3 * sin(state_t * 2.0))
 		S.DEAD:
 			txt = ""
+		S.SPOTTED:
+			txt = "!"
+			col = Color(1.0, 0.5, 0.05, 0.55 + 0.45 * sin(state_t * 40.0))
 		S.FLEE, S.COWER:
 			txt = "!!"
 			col = Color(1.0, 0.5, 0.1, 1.0)
@@ -459,7 +493,10 @@ func _perceive(delta: float) -> void:
 			awareness = maxf(0.0, awareness - decay * delta)
 
 	if state in [S.PATROL, S.SUSPICIOUS, S.INVESTIGATE, S.SEARCH] and awareness >= 1.0:
-		_enter_combat()
+		if GameState.alarm_active:
+			_enter_combat()
+		else:
+			_enter_spotted()
 	elif state == S.PATROL and awareness >= 0.3:
 		_set_state(S.SUSPICIOUS)
 		bark("suspicious")
@@ -467,7 +504,7 @@ func _perceive(delta: float) -> void:
 
 
 func _on_noise(pos: Vector3, radius: float, kind: String) -> void:
-	if state in [S.DEAD, S.BLINDED, S.COMBAT, S.FLEE, S.COWER]:
+	if state in [S.DEAD, S.BLINDED, S.COMBAT, S.FLEE, S.COWER, S.SPOTTED] or restrained:
 		return
 	var d := global_position.distance_to(pos)
 	if d > radius:
@@ -480,13 +517,13 @@ func _on_noise(pos: Vector3, radius: float, kind: String) -> void:
 	if d > r:
 		return
 	if state == S.ASLEEP:
-		if deep_sleep and kind not in ["shout", "panic", "alarm"]:
+		if deep_sleep and kind not in ["shout", "panic", "alarm", "deathcry"]:
 			return
 		if d < r * 0.6:
 			wake_up()
 			investigate(pos, kind in ["shout", "panic"])
 		return
-	if kind == "shout" or kind == "panic" or kind == "body":
+	if kind in ["shout", "panic", "body", "deathcry"]:
 		investigate(pos, true)
 		return
 	# footsteps / lures / snuffs
@@ -650,6 +687,30 @@ func _do_investigate(delta: float) -> void:
 				_set_state(S.PATROL)
 
 
+func _enter_spotted() -> void:
+	## The reaction window: he has seen you and is drawing breath to shout.
+	_set_state(S.SPOTTED)
+	spotted_t = REACTION_TIME
+	lost_t = 0.0
+	awareness = 1.2
+	_stop()
+	bark("spotted", true)
+	Sfx.play_at("huh", eye_pos(), 2.0, 1.5)
+	GameState.on_spotted(self)
+
+
+func _do_spotted(delta: float) -> void:
+	_stop()
+	model.pose = "alert" if not is_target else "panic"
+	var p = GameState.player
+	if p:
+		_face_point(p.global_position, delta, 10.0)
+		last_known = p.global_position
+	spotted_t -= delta
+	if spotted_t <= 0.0:
+		_enter_combat()
+
+
 func _enter_combat() -> void:
 	if is_target:
 		GameState.raise_alarm()
@@ -661,6 +722,9 @@ func _enter_combat() -> void:
 	_set_state(S.COMBAT)
 	awareness = 1.2
 	shout_t = 0.0
+	lost_t = 0.0
+	if GameState.player:
+		last_known = GameState.player.global_position
 	bark("combat", true)
 	Sfx.play_at("alert", eye_pos(), 2.0)
 	GameState.raise_alarm()
@@ -684,21 +748,29 @@ func _do_combat(delta: float) -> void:
 		_stop()
 		_face_point(p.global_position, delta, 4.0)
 		attack_t += delta
-		model.attack_p = attack_t / 0.95
-		if attack_t > 0.42 and attack_t < 0.48 and not attack_hit_done:
-			Sfx.play_at("swing", eye_pos(), -2.0)
-		if attack_t > 0.5 and not attack_hit_done:
+		model.attack_p = attack_t / ATTACK_TIME
+		# Lunge into the swing - backing off barely helps.
+		if attack_t > 0.15 and attack_t < ATTACK_HIT:
+			var lunge: Vector3 = p.global_position - global_position
+			lunge.y = 0.0
+			if lunge.length() > 1.0:
+				lunge = lunge.normalized() * 3.2
+				velocity.x = lunge.x
+				velocity.z = lunge.z
+		if attack_t > ATTACK_HIT - 0.06 and attack_t < ATTACK_HIT and not attack_hit_done:
+			Sfx.play_at("swing", eye_pos(), 0.0)
+		if attack_t > ATTACK_HIT and not attack_hit_done:
 			attack_hit_done = true
 			var to: Vector3 = p.global_position - global_position
 			to.y = 0.0
-			if to.length() < 2.15 and rad_to_deg(forward().angle_to(to)) < 70.0:
-				p.take_damage(24.0, global_position)
-		if attack_t >= 0.95:
+			if to.length() < 2.4 and rad_to_deg(forward().angle_to(to)) < 75.0:
+				p.take_damage(ATTACK_DAMAGE, global_position)
+		if attack_t >= ATTACK_TIME:
 			attack_t = -1.0
 			model.attack_p = -1.0
-			attack_cd = _rng.randf_range(0.5, 1.2)
+			attack_cd = _rng.randf_range(0.25, 0.6)
 		return
-	if sees_player and d < 1.9:
+	if sees_player and d < 2.3:
 		_stop()
 		_face_point(p.global_position, delta, 8.0)
 		if attack_cd <= 0.0:
@@ -706,7 +778,7 @@ func _do_combat(delta: float) -> void:
 			attack_hit_done = false
 			Sfx.play_at("grunt", eye_pos(), -3.0)
 	else:
-		_nav_move(last_known, run_speed, delta)
+		_nav_move(last_known, maxf(run_speed, COMBAT_SPEED), delta)
 	if lost_t > 6.0:
 		bark("lost", true)
 		_start_search(last_known)
@@ -840,36 +912,128 @@ func wake_up() -> void:
 
 # ================================================================ taking hits
 
-func receive_strike(attacker_pos: Vector3, hit_pos: Vector3) -> String:
+func receive_strike(attacker_pos: Vector3, hit_pos: Vector3, throat: bool, silenced: bool) -> String:
+	## Only a blade across/into the throat kills outright, and only if he isn't
+	## squared up fighting you. Anything else is a wound that starts a fight.
 	if state == S.DEAD:
 		return ""
 	var to_att := attacker_pos - global_position
 	to_att.y = 0.0
 	var behind := rad_to_deg(forward().angle_to(to_att)) > 100.0
-	var helpless := state in [S.ASLEEP, S.BLINDED, S.COWER, S.FLEE]
-	var unaware := state != S.COMBAT and not (sees_player and awareness >= 0.95)
-	if is_target or helpless or unaware or behind:
-		die(attacker_pos, true, hit_pos)
-		return "sneak"
-	# Face-to-face with an alerted guard: armour and parries.
-	if attack_t < 0.0 and _rng.randf() < 0.35:
+	var helpless := state in [S.ASLEEP, S.BLINDED, S.COWER, S.FLEE] or restrained
+	var off_guard := state != S.COMBAT  # includes the SPOTTED reaction window
+	var mid_swing := state == S.COMBAT and attack_t >= 0.0 and attack_t < ATTACK_HIT
+	if throat:
+		if is_target or helpless or off_guard or behind or mid_swing:
+			die(attacker_pos, true, hit_pos, silenced)
+			return "silent" if silenced else "throat"
 		Sfx.play_at("clang", hit_pos, 0.0)
 		attack_cd = 0.0
 		return "block"
-	health -= 34.0
-	Sfx.play_at("grunt", eye_pos(), 0.0)
+	# Body hit.
+	if state == S.COMBAT and attack_t < 0.0 and _rng.randf() < 0.7:
+		Sfx.play_at("clang", hit_pos, 0.0)
+		attack_cd = 0.0  # riposte
+		return "block"
+	health -= 25.0
+	Fx.blood(get_tree().current_scene, hit_pos, (hit_pos - attacker_pos).normalized())
+	if health <= 0.0:
+		die(attacker_pos, false, hit_pos, false)
+		return "kill"
+	if restrained:
+		restrained = false
+	if state == S.ASLEEP:
+		model.get_up()
+		if snore:
+			snore.stop()
 	attack_t = -1.0
 	model.attack_p = -1.0
-	attack_cd = 0.6
-	if health <= 0.0:
-		die(attacker_pos, false, hit_pos)
-		return "kill"
+	if state != S.COMBAT:
+		bark("wounded", true)
+		Sfx.play_at("scream", eye_pos(), 2.0, 0.8)
+		awareness = 1.5
+		last_known = attacker_pos
+		_enter_combat()
+		return "wounded"
+	Sfx.play_at("grunt", eye_pos(), 0.0)
+	attack_cd = 0.3
 	return "hit"
 
 
-func die(attacker_pos: Vector3, sneak: bool, hit_pos: Vector3) -> void:
+func receive_bolt(part: String, from_pos: Vector3, hit_pos: Vector3) -> String:
+	if state == S.DEAD:
+		return ""
+	if part == "head":
+		die(from_pos, state != S.COMBAT, hit_pos, true, 3.5)
+		return "headshot"
+	health -= 45.0
+	if health <= 0.0:
+		die(from_pos, false, hit_pos, false)
+		return "kill"
+	Fx.blood(get_tree().current_scene, hit_pos, (hit_pos - from_pos).normalized())
+	if state == S.ASLEEP:
+		model.get_up()
+	restrained = false
+	if state != S.COMBAT:
+		bark("wounded", true)
+		Sfx.play_at("scream", eye_pos(), 2.0, 0.8)
+		last_known = from_pos
+		awareness = 1.5
+		_enter_combat()
+		return "wounded"
+	return "hit"
+
+
+# ---------------------------------------------------------------- mouth cover
+
+func try_restrain() -> bool:
+	if state in [S.DEAD, S.COMBAT] or restrained:
+		return false
+	restrained = true
+	restrain_t = RESTRAIN_TIME
+	attack_t = -1.0
+	model.attack_p = -1.0
+	_stop()
+	if state != S.ASLEEP:
+		model.pose = "blind"
+		bark("muffled", true)
+		Sfx.play_at("muffled", eye_pos(), -8.0)
+	return true
+
+
+func release_restraint() -> void:
+	if not restrained:
+		return
+	restrained = false
+	if state == S.DEAD or state == S.ASLEEP or state == S.BLINDED:
+		return
+	# He got loose. He WILL scream.
+	bark("broke_free", true)
+	awareness = 1.5
+	if GameState.player:
+		last_known = GameState.player.global_position
+	_enter_combat()
+
+
+func _do_restrained(delta: float) -> void:
+	_stop()
+	velocity.y = 0.0
+	model.speed = 0.0
+	restrain_t -= delta
+	if state != S.ASLEEP:
+		model.pose = "blind"
+		awareness = 1.0
+		if _rng.randf() < delta * 2.0:
+			Sfx.play_at("muffled", eye_pos(), -10.0, _rng.randf_range(0.9, 1.2))
+		if restrain_t <= 0.0:
+			release_restraint()
+
+
+func die(attacker_pos: Vector3, sneak: bool, hit_pos: Vector3, silent := false, fall_noise := -1.0) -> void:
 	if state == S.DEAD:
 		return
+	var was_restrained := restrained
+	restrained = false
 	var from_behind := forward().dot(attacker_pos - global_position) < 0.0
 	_set_state(S.DEAD)
 	_stop()
@@ -886,8 +1050,17 @@ func die(attacker_pos: Vector3, sneak: bool, hit_pos: Vector3) -> void:
 	if sneak:
 		GameState.stats.sneak_kills += 1
 	Fx.blood(get_tree().current_scene, hit_pos, (hit_pos - attacker_pos).normalized() + Vector3.UP * 0.3)
-	Sfx.play_at("fall", global_position, -4.0)
-	GameState.emit_noise(global_position, 3.5, "body")
+	if silent:
+		# Hand over the mouth: lowered quietly to the floor.
+		var fn := fall_noise if fall_noise >= 0.0 else (1.2 if was_restrained else 2.5)
+		Sfx.play_at("fall", global_position, -16.0 if was_restrained else -6.0)
+		GameState.emit_noise(global_position, fn, "body")
+	else:
+		# A choked death-cry: everyone nearby comes running.
+		Sfx.play_at("deathcry", eye_pos(), 4.0)
+		Sfx.play_at("fall", global_position, -4.0)
+		bark("wounded", true)
+		GameState.emit_noise(global_position, 11.0, "deathcry")
 	if lantern:
 		# Drop the lantern; it keeps burning beside the body.
 		var gp := lantern.global_position

@@ -6,6 +6,7 @@ signal alarm_changed(active: bool)
 signal objective_changed(text: String)
 signal notify(text: String, duration: float)
 signal mission_ended(success: bool, summary: String)
+signal spotted(guard: Node)
 
 const LAYER_WORLD := 1
 const LAYER_PLAYER := 2
@@ -13,7 +14,7 @@ const LAYER_NPC := 4
 const MOON_DIR := Vector3(0.45, 0.62, -0.64)  # direction TOWARD the moon
 const MOON_OPEN := 0.10
 const MOON_COVERED := 0.025
-const ALARM_DURATION := 50.0
+const ALARM_DURATION := 90.0
 
 var player: Node3D = null
 var target: Node3D = null
@@ -87,6 +88,10 @@ func raise_alarm() -> void:
 		alarm_changed.emit(true)
 		notify.emit("ALARM RAISED!  Break line of sight and hide.", 4.0)
 		Sfx.play_ui("alarm_bell", -4.0)
+
+
+func on_spotted(g: Node) -> void:
+	spotted.emit(g)
 
 
 func set_objective(t: String) -> void:
@@ -190,6 +195,9 @@ func _setup_input() -> void:
 	_key("restart", KEY_R)
 	_key("toggle_mouse", KEY_ESCAPE)
 	_key("help", KEY_H)
+	_key("draw_dagger", KEY_F)
+	_key("draw_crossbow", KEY_B)
+	_key("grab", KEY_V)
 	for i in 6:
 		_key("spell_%d" % (i + 1), KEY_1 + i)
 	_mouse("attack", MOUSE_BUTTON_LEFT)

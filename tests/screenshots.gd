@@ -10,6 +10,9 @@ var wait := 0
 
 # [name, player pos, yaw deg, pitch deg, crouch]
 var views := [
+	["13_crossbow", Vector3(-2.0, 0, 16.0), 0.0, 2.0, false, "", "crossbow"],
+	["14_grab_dagger", Vector3(-6.0, 0, 18.0), 0.0, -8.0, false, "", "dagger_grab"],
+	["15_look_down_kit", Vector3(-2.0, 0, 16.0), 0.0, -75.0, false, "", "none"],
 	["00_guard_model", Vector3(-8.0, 0, 18.0), 0.0, -12.0, false, "Osric"],
 	["00_lord_model", Vector3(-6.0, 0, 18.0), 0.0, -12.0, false, "Lord Aldric Vane"],
 	["01_start_forest", Vector3(-21.0, 0, 46.0), 0.0, 4.0, false],
@@ -63,11 +66,21 @@ func _process(_d: float) -> void:
 		p.pitch = deg_to_rad(v[3])
 		p.desktop_crouch = v[4]
 		p.fade = 0.0
+		if p.hud and p.hud.help_panel:
+			p.hud.help_panel.visible = false
 		p.fade_target = 0.0
 		# freeze AI so guards don't spot the camera between shots
 		for g in GameState.guards:
 			g.awareness = 0.0
-		if v.size() > 5:
+		if v.size() > 6:
+			match v[6]:
+				"crossbow":
+					p.weapons.draw("crossbow")
+				"dagger_grab":
+					p.weapons.draw("dagger")
+				_:
+					p.weapons.sheathe()
+		if v.size() > 5 and v[5] != "":
 			for g in GameState.guards:
 				if g.display_name == v[5]:
 					var fwd := Vector3(-sin(p.yaw), 0, -cos(p.yaw))

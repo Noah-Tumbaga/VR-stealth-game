@@ -30,16 +30,55 @@ renderer adds volumetric fog, SSAO and better shadows.)*
   roofs). Watch the **light gem** on your left wrist (VR) or the HUD gem (desktop).
 - **Crouching** (physically, or with the right stick down) makes you harder to see and much
   quieter. You are almost invisible while crouched in **bushes, hay piles and flower bushes**.
-- **Sound carries.** Footsteps make noise: sprinting is loud, walking is moderate and
-  crouching is nearly silent. Walls muffle sound.
+- **Movement makes noise guards can hear**, even though you won't hear your own footsteps.
+  Sprinting is loud, walking is moderate and crouching is nearly silent. Walls muffle sound.
 - **Guards** have a vision cone with line-of-sight checks and a close-range "sixth sense".
-  Their awareness fills up over time: `?` means suspicious, they investigate, and `!` means
-  combat. Once alerted they raise the alarm and other guards come running. Guards who find a
-  **body** sound the alarm. Guards who find a **sleeper** wake them up.
-- **Sneak attack:** one dagger strike kills anyone who isn't actively fighting you. That
-  covers guards hit from behind, unaware guards, blinded guards and sleeping guards. Alerted
-  guards that face you will parry, and their armour means it takes 3 hits to kill one. You
-  can't win a straight fight, and you aren't meant to.
+  Their awareness fills up over time: `?` means suspicious, and they come to investigate.
+  Guards who find a **body** sound the alarm. Guards who find a **sleeper** wake them up.
+
+### Getting spotted
+
+When a guard's awareness fills, he freezes and starts to shout. A flashing orange `!`
+appears over him, you hear a sting and your controllers buzz. You then have
+**0.85 seconds** to silence him with a throat kill, a crossbow headshot or a Blinding Hex.
+If you miss that window:
+
+- The **alarm** rings for 90 seconds. Every guard's detection speeds up and later
+  sightings skip the reaction window.
+- **Three gate sergeants** come through the gate and hunt your last known position.
+- **Combat is lethal.** Guards lunge into their swings and hit for **40 damage**, so three
+  hits kill you. Each hit staggers you to a crawl, and you don't heal while the alarm is up.
+  They run faster than you can sprint. Alerted guards parry about 70 % of blows and need
+  about 4 body wounds to kill. You can't win a fair fight. Break line of sight and hide, or
+  blind them.
+
+## Killing
+
+### The dagger
+
+- The dagger rests in a **sheath on your chest**. In VR, reach to it with your right hand
+  and squeeze grip to draw it. Let go of grip and it goes back in the sheath.
+- **Only the throat kills.** Either drag the blade across the neck or stab into it. A
+  guard can be killed this way if he's unaware, seen from behind, in his reaction window,
+  blinded, asleep or held.
+- **Hitting the body only wounds.** The guard screams and fights you right away.
+- **Cover his mouth.** From behind, grab his face with your left hand (left grip). He
+  struggles, muffled, for about 1.8 seconds. If you open his throat while you hold him, the
+  kill is **silent** and you lower him quietly to the ground. If you hesitate, he breaks
+  free and raises the alarm.
+- If you kill him **without** covering his mouth, he dies with a choked cry. Guards within
+  about 11 m come running and find the body.
+- A guard who is fighting you and facing you **parries** throat strikes, unless you catch
+  him while his sword is raised.
+
+### The hand crossbow
+
+- The crossbow is **holstered on your right hip**. Draw it like the dagger. The right
+  trigger fires along the crossbow, and the glowing rune sights help you aim in the dark.
+- A **headshot kills silently**. A body shot only wounds, and the guard screams.
+- A bolt that misses thunks into the wall, and nearby guards come to look. You can use
+  this as a lure.
+- The crossbow cranks itself back in 2.4 seconds. You carry **8 bolts**.
 
 ## Shadow magic (left hand)
 
@@ -64,22 +103,26 @@ Mana regenerates slowly, and so does health once you are out of combat.
 | Left stick | Smooth locomotion (head-relative). Click and hold while moving to sprint. |
 | Right stick left/right | Snap turn 40° |
 | Right stick down | Toggle crouch (you can also physically crouch) |
-| **Swing your right hand** | Strike with the dagger. Stab or slash fast enough to hit. |
-| Right trigger | Strike assist when the blade is already touching a target |
+| Right grip at your chest / right hip | Draw the dagger / the crossbow (release grip to put it away) |
+| **Swing your right hand** | Dagger: slash across or stab into the **throat** |
+| Right trigger | Fire the crossbow |
+| Left grip on a guard's face | Cover his mouth and restrain him |
 | Left trigger (half / full) | Aim the spell (shows a beam and target marker) / cast |
 | Left Y/B · X/A | Next / previous spell |
 | Left menu | Show the objective. After the mission ends: restart |
 
 The **left wrist** shows the current spell, a mana bar, a health bar and the light gem.
-Haptics pulse on kills, on hits and with your heartbeat as guards grow suspicious.
+Haptics pulse when you're spotted, when you kill or get hit, while a held guard struggles, and with your heartbeat as guards grow suspicious.
 
 ### Desktop
 | Key | Action |
 |---|---|
 | WASD / mouse | Move / look |
-| Shift | Sprint (loud!) |
+| Shift | Sprint (guards hear it) |
 | C or Ctrl | Toggle crouch |
-| LMB | Dagger stab |
+| F / B | Draw or sheathe the dagger / the crossbow |
+| V (hold) | Cover the mouth of the guard in front of you |
+| LMB | Dagger: aim at the throat (when you're holding a mouth, it slits automatically) · Crossbow: fire |
 | RMB (hold → release) | Aim → cast the selected spell |
 | 1–6, Q/E, mouse wheel | Select spell |
 | H | Show or hide help · Esc releases the mouse · R restarts after the mission ends (Shift+R any time) |
@@ -121,8 +164,10 @@ scripts/util/mats.gd             procedural PBR materials (noise-generated albed
 scripts/util/geo.gd              primitive-mesh + collision helpers
 scripts/npc/humanoid.gd          detailed procedural humanoid model + procedural animation
 scripts/npc/guard.gd             guard/target AI (perception, hearing, states, combat)
-scripts/player/player.gd         VR + desktop player, dagger, spells, stealth metrics
-scripts/player/hand_models.gd    gloved hands, dagger, casting orb, wrist display
+scripts/player/player.gd         VR + desktop player, locomotion, spells, stealth metrics
+scripts/player/weapons.gd        chest sheath, hip holster, throat kills, mouth cover, crossbow
+scripts/player/bolt.gd           crossbow bolt
+scripts/player/hand_models.gd    gloved hands, dagger, crossbow, sheath, holster, casting orb, wrist display
 scripts/magic/spell_projectile.gd
 scripts/world/level_builder.gd   the map, lighting, NPC roster, navmesh
 scripts/world/props.gd           40+ detailed prop builders
@@ -135,8 +180,9 @@ tests/                           headless smoke test, patrol soak test, screensh
 ## Tests
 
 ```bash
-# Gameplay smoke test: patrols, detection, sneak kills, every spell, the live stab
-# and projectile paths, and mission completion.
+# Gameplay smoke test (28 checks): patrols, the spotted reaction window, alarm and
+# reinforcements, throat-only kills, wounding, mouth cover, parries, crossbow headshot
+# and body shot, spells, a live desktop takedown, and mission completion.
 godot --headless --fixed-fps 60 --path . res://tests/smoke_test.tscn -- --desktop
 
 # 2-minute patrol soak test (reports any guard that gets stuck on geometry)

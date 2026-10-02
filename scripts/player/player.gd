@@ -8,6 +8,7 @@ const Projectile = preload("res://scripts/magic/spell_projectile.gd")
 const Fx = preload("res://scripts/fx/fx.gd")
 const Mats = preload("res://scripts/util/mats.gd")
 const Geo = preload("res://scripts/util/geo.gd")
+const Weapons = preload("res://scripts/player/weapons.gd")
 
 const SPELLS := [
 	{"id": "blind", "name": "Blinding Hex", "cost": 30.0, "color": Color(0.78, 0.5, 1.0),
@@ -30,8 +31,6 @@ const SPRINT := 4.8
 const STEP_MAX := 13.0
 const MANA_REGEN := 6.5
 const DESK_LEFT := Vector3(-0.26, -0.27, -0.42)
-const DESK_RIGHT := Vector3(0.25, -0.27, -0.4)
-const DESK_RIGHT_ROT := Vector3(32, 14, 0)
 
 var vr := false
 var hud: Node = null
@@ -42,8 +41,7 @@ var right_ctrl: XRController3D
 var left_aim: XRController3D
 var left_rig: Node3D
 var right_rig: Node3D
-var blade_base: Node3D
-var blade_tip: Node3D
+var weapons: Node
 var orb: MeshInstance3D
 var orb_halo: MeshInstance3D
 var orb_ring: MeshInstance3D
@@ -75,10 +73,8 @@ var head_h := 1.65
 var standing_h := 1.6
 var shroud_t := 0.0
 var step_accum := 0.0
-var last_tip := Vector3.ZERO
-var strike_cd := 0.0
-var swing_snd_cd := 0.0
-var stab_anim := -1.0
+var stagger_t := 0.0
+var spotted_flash := 0.0
 var cast_anim := -1.0
 var damage_flash := 0.0
 var fade := 1.0
@@ -93,7 +89,6 @@ var virtual_crouch := false
 var snap_ready := true
 var crouch_ready := true
 var trig_l_high := false
-var trig_r_high := false
 var btn_prev := {}
 var aiming := false
 var aim_valid := false
@@ -157,10 +152,6 @@ func _ready() -> void:
 		left_rig.position = DESK_LEFT
 		left_rig.rotation_degrees = Vector3(25, 20, -15)
 		left_rig.scale = Vector3.ONE * 0.8
-		right_rig.position = DESK_RIGHT
-		right_rig.rotation_degrees = DESK_RIGHT_ROT
-	blade_base = right_rig.get_node("BladeBase")
-	blade_tip = right_rig.get_node("BladeTip")
 	orb = left_rig.get_node("OrbRoot/Orb")
 	orb_halo = left_rig.get_node("OrbRoot/Halo")
 	orb_ring = left_rig.get_node("OrbRoot/Ring")
@@ -170,6 +161,10 @@ func _ready() -> void:
 	gem = left_rig.get_node("Wrist/Gem")
 	_build_overlay()
 	_build_aim_visuals()
+	weapons = Weapons.new()
+	weapons.name = "Weapons"
+	add_child(weapons)
+	weapons.setup(self)
 
 	ambience = AudioStreamPlayer.new()
 	ambience.stream = Sfx.streams.get("wind")
@@ -185,6 +180,7 @@ func _ready() -> void:
 	GameState.player = self
 	GameState.notify.connect(_on_notify)
 	GameState.mission_ended.connect(_on_mission_ended)
+	GameState.spotted.connect(_on_spotted)
 	_prev_pos = global_position
 	_select_spell(0, true)
 	if not vr:
@@ -283,7 +279,7 @@ func _physics_process(delta: float) -> void:
 		_update_posture(delta)
 		_footsteps(delta)
 		_update_visibility(delta)
-		_update_blade(delta)
+		weapons.update(delta)
 		_update_spells(delta)
 		_check_extraction()
 	elif vr and GameState.mission_over:
@@ -335,7 +331,7 @@ func _vr_locomotion(delta: float) -> void:
 	right.y = 0.0
 	right = right.normalized()
 	sprinting = _vr_btn("primary_click", left_ctrl) and stick.length() > 0.8 and not crouched
-	var spd := CROUCH if crouched else (SPRINT if sprinting else WALK)
+	var spd := (CROUCH if crouched else (SPRINT if sprinting else WALK)) * (0.35 if stagger_t > 0.0 else 1.0)
 	var wish := (fwd * stick.y + right * stick.x) * spd
 	velocity.x = wish.x
 	velocity.z = wish.z
@@ -402,8 +398,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	for i in SPELLS.size():
 		if event.is_action_pressed("spell_%d" % (i + 1)):
 			_select_spell(i)
-	if event.is_action_pressed("attack") and stab_anim < 0.0:
-		stab_anim = 0.0
+	weapons.desktop_input(event)
 	if event.is_action_pressed("help") and hud:
 		hud.toggle_help()
 
@@ -411,7 +406,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _desktop_locomotion(delta: float) -> void:
 	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	sprinting = Input.is_action_pressed("sprint") and iv.length() > 0.1 and not desktop_crouch
-	var spd := CROUCH if desktop_crouch else (SPRINT if sprinting else WALK)
+	var spd := (CROUCH if desktop_crouch else (SPRINT if sprinting else WALK)) * (0.35 if stagger_t > 0.0 else 1.0)
 	var dir := (origin.global_transform.basis * Vector3(iv.x, 0, iv.y))
 	dir.y = 0.0
 	if dir.length() > 1.0:
@@ -463,11 +458,8 @@ func _footsteps(delta: float) -> void:
 		radius = STEP_MAX
 	elif horiz_speed < 1.2:
 		radius = 3.0
+	# Silent for you, but guards can still hear you moving.
 	GameState.emit_noise(global_position, radius, "step")
-	if crouched:
-		Sfx.play_at("step_soft", global_position, -10.0, 1.0, 10.0)
-	else:
-		Sfx.play_at("step", global_position, -9.0 + (4.0 if radius >= STEP_MAX else 0.0), 1.0, 25.0)
 
 
 # ---------------------------------------------------------------- stealth
@@ -496,11 +488,13 @@ func take_damage(amount: float, _from_pos: Vector3) -> void:
 		return
 	health -= amount
 	damage_flash = 1.0
-	regen_delay = 6.0
+	regen_delay = 12.0
+	stagger_t = 0.9  # the blow knocks you half off your feet
 	_end_shroud()
-	Sfx.play_ui("hurt", -2.0)
-	_haptic(left_ctrl, 0.9, 0.25)
-	_haptic(right_ctrl, 0.9, 0.25)
+	weapons.release_grab()
+	Sfx.play_ui("hurt", 2.0)
+	_haptic(left_ctrl, 1.0, 0.4)
+	_haptic(right_ctrl, 1.0, 0.4)
 	if health <= 0.0:
 		health = 0.0
 		dead = true
@@ -517,90 +511,6 @@ func _check_extraction() -> void:
 func _restart() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().reload_current_scene()
-
-
-# ---------------------------------------------------------------- blade
-
-func _update_blade(delta: float) -> void:
-	strike_cd -= delta
-	swing_snd_cd -= delta
-	var forced := false
-	if not vr and stab_anim >= 0.0:
-		stab_anim += delta
-		var t := stab_anim / 0.32
-		var reach := sin(clampf(t, 0.0, 1.0) * PI)
-		right_rig.position = DESK_RIGHT + Vector3(-0.14, 0.12, -0.5) * reach
-		right_rig.rotation_degrees = DESK_RIGHT_ROT + Vector3(-30.0, 6.0, -25.0) * reach
-		if t > 0.3 and t < 0.65:
-			forced = true
-		if stab_anim > 0.32:
-			stab_anim = -1.0
-			right_rig.position = DESK_RIGHT
-			right_rig.rotation_degrees = DESK_RIGHT_ROT
-		if t > 0.15 and t < 0.25 and swing_snd_cd <= 0.0:
-			swing_snd_cd = 0.3
-			Sfx.play_at("swing", blade_tip.global_position, -6.0)
-	var tip := blade_tip.global_position
-	var base := blade_base.global_position
-	var vel := (tip - last_tip).length() / maxf(delta, 0.0001)
-	last_tip = tip
-	if vr and vel > 3.0 and swing_snd_cd <= 0.0:
-		swing_snd_cd = 0.35
-		Sfx.play_at("swing", tip, -8.0)
-	var assist := false
-	if vr:
-		var tr := right_ctrl.get_float("trigger")
-		if tr > 0.8 and not trig_r_high:
-			assist = true
-		trig_r_high = tr > 0.6
-	if strike_cd > 0.0:
-		return
-	if vel < 1.5 and not assist and not forced:
-		return
-	var extra := 0.14 if (assist or forced) else 0.02
-	for g in GameState.guards:
-		if not is_instance_valid(g) or not g.is_alive():
-			continue
-		if g.global_position.distance_to(global_position) > 3.0:
-			continue
-		if g.blade_hit_test(base, tip, extra):
-			_strike(g, tip)
-			return
-	# Desktop reach assist: a short cone in front of the camera.
-	if forced:
-		var cf := -camera.global_transform.basis.z
-		for g in GameState.guards:
-			if not is_instance_valid(g) or not g.is_alive():
-				continue
-			var to: Vector3 = g.model.chest_center() - camera.global_position
-			if to.length() < 1.75 and rad_to_deg(cf.angle_to(to)) < 30.0:
-				_strike(g, g.model.chest_center())
-				return
-
-
-func _strike(g, hit_pos: Vector3) -> void:
-	strike_cd = 0.5
-	_end_shroud()
-	var result: String = g.receive_strike(global_position, hit_pos)
-	match result:
-		"sneak":
-			Sfx.play_at("stab", hit_pos, 0.0)
-			Sfx.play_ui("kill", -3.0)
-			_haptic(right_ctrl, 1.0, 0.35)
-			if g.is_target:
-				pass
-			elif randf() < 0.6:
-				GameState.notify.emit(["Silent.", "From the shadows.", "Not a sound.", "Clean."][randi() % 4], 1.4)
-		"kill":
-			Sfx.play_at("stab", hit_pos, 0.0)
-			_haptic(right_ctrl, 1.0, 0.3)
-		"hit":
-			Sfx.play_at("stab", hit_pos, -4.0)
-			Fx.blood(get_tree().current_scene, hit_pos, -camera.global_transform.basis.z)
-			_haptic(right_ctrl, 0.7, 0.15)
-		"block":
-			_haptic(right_ctrl, 1.0, 0.1)
-			strike_cd = 0.8
 
 
 # ---------------------------------------------------------------- spells
@@ -639,7 +549,7 @@ func _update_spells(delta: float) -> void:
 	mana = minf(100.0, mana + MANA_REGEN * delta)
 	if regen_delay > 0.0:
 		regen_delay -= delta
-	elif health < 100.0:
+	elif health < 100.0 and not GameState.alarm_active:
 		health = minf(100.0, health + 3.0 * delta)
 	if shroud_t > 0.0:
 		shroud_t -= delta
@@ -902,10 +812,12 @@ func _haptic(ctrl: XRController3D, amp: float, dur: float) -> void:
 
 func _update_feedback(delta: float) -> void:
 	damage_flash = maxf(0.0, damage_flash - delta * 1.6)
+	spotted_flash = maxf(0.0, spotted_flash - delta * 2.5)
+	stagger_t = maxf(0.0, stagger_t - delta)
 	fade = move_toward(fade, fade_target, delta * (2.5 if fade > fade_target else 0.8))
 	var low_hp := clampf(1.0 - health / 45.0, 0.0, 1.0) * (0.25 + 0.1 * sin(Time.get_ticks_msec() * 0.006))
 	var col := Color(0, 0, 0, fade)
-	var red := damage_flash * 0.5 + low_hp
+	var red := damage_flash * 0.65 + low_hp + spotted_flash * 0.3
 	if red > 0.0:
 		col = Color(lerpf(0.0, 0.5, red / (red + fade + 0.001)), 0.0, 0.0, clampf(fade + red, 0.0, 1.0))
 	if shroud_t > 0.0 and fade < 0.1:
@@ -925,7 +837,7 @@ func _update_feedback(delta: float) -> void:
 
 	# wrist display
 	var s: Dictionary = SPELLS[spell_idx]
-	wrist_label.text = "%s  %d" % [s.name, int(s.cost)]
+	wrist_label.text = "%s  %d\n%s" % [s.name, int(s.cost), weapons.status_text()]
 	var sc: Color = s.color
 	wrist_label.modulate = sc.lightened(0.3) if mana >= float(s.cost) else Color(0.5, 0.5, 0.55)
 	mana_bar.scale.x = maxf(mana / 100.0, 0.001)
@@ -946,6 +858,23 @@ func _update_feedback(delta: float) -> void:
 		hud.update_status(self)
 
 
+func _on_spotted(_g: Node) -> void:
+	spotted_flash = 1.0
+	Sfx.play_ui("spotted", 0.0)
+	_haptic(left_ctrl, 1.0, 0.2)
+	_haptic(right_ctrl, 1.0, 0.2)
+	GameState.notify.emit("SPOTTED!  Silence him before he shouts!", 1.0)
+
+
+func on_bolt_result(result: String) -> void:
+	match result:
+		"headshot":
+			Sfx.play_ui("kill", -6.0)
+			GameState.notify.emit("Headshot.", 1.0)
+		"wounded":
+			GameState.notify.emit("Only wounded! He's raising the alarm!", 1.8)
+
+
 func _on_notify(text: String, duration: float) -> void:
 	if vr:
 		vr_msg.text = text
@@ -963,3 +892,4 @@ func _on_mission_ended(success: bool, summary: String) -> void:
 	aim_marker.visible = false
 	step_ghost.visible = false
 	aim_beam.visible = false
+	weapons.release_grab()

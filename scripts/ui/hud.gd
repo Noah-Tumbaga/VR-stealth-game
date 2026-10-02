@@ -61,6 +61,7 @@ func _ready() -> void:
 	vit.add_child(gem_row)
 	gem = Panel.new()
 	gem.custom_minimum_size = Vector2(34, 34)
+	gem.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	gem_style = StyleBoxFlat.new()
 	gem_style.bg_color = Color(0.2, 0.2, 0.2)
 	gem_style.set_corner_radius_all(17)
@@ -97,16 +98,19 @@ func _ready() -> void:
 		spells_box.add_child(pc)
 		spell_panels.append([pc, sb, l])
 
-	help_panel = _panel(root, Vector2(560, 470))
-	_place(help_panel, Control.PRESET_CENTER_RIGHT, -590, -250, -24, 250)
+	help_panel = _panel(root, Vector2(580, 600))
+	_place(help_panel, Control.PRESET_CENTER_RIGHT, -610, -310, -24, 310)
 	var ht := _label(help_panel, "", 15, Color(0.9, 0.9, 0.95))
 	ht.text = """SHADOWVEIL - controls (desktop)    [H] toggle
 
 WASD move   Mouse look   Shift sprint (loud!)
 C / Ctrl  crouch (quiet, harder to see)
-LMB  stab with dagger - one-hit kill on anyone
-      who isn't fighting you (from behind, unaware,
-      blinded, asleep)
+F  draw/sheathe dagger    B  draw/holster crossbow
+V (hold)  cover a guard's mouth from behind
+LMB  dagger: aim at the THROAT to kill
+      (body hits only wound - he'll scream and fight)
+      covering his mouth makes the kill silent
+LMB  crossbow: headshot = silent kill
 RMB  hold to aim, release to cast selected spell
 1-6 / Q E / wheel  choose spell
 Esc release mouse     Shift+R restart
@@ -119,8 +123,9 @@ Spells
  5 Shadow Step - silent blink; aim at ledges
  6 Shroud - near-invisible for 10s
 
-Stay in darkness (watch the light gem), crouch in
-bushes and hay, and never let them see you twice."""
+If you're SPOTTED you have under a second to
+silence him before the alarm. Combat is lethal:
+three sword hits and you're dead."""
 	help_panel.visible = true
 
 	end_panel = _panel(root, Vector2(760, 380))
@@ -236,7 +241,7 @@ func update_status(p) -> void:
 		sc = Color(0.8, 0.75, 0.6)
 	if p.crouched:
 		st += "  · crouched"
-	status_lbl.text = st
+	status_lbl.text = st + "\n" + p.weapons.status_text()
 	status_lbl.add_theme_color_override("font_color", sc)
 	var th := GameState.max_threat
 	if th >= 1.0:
